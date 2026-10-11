@@ -1,0 +1,244 @@
+name: Sync Upstream
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select latest eligible release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: omlahore/RemoveMacAI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cutoff="$(date -u -d '36 hours ago' +%s)"
+          releases="$(gh api --paginate --slurp \
+            "repos/$UPSTREAM_REPO/releases" --jq 'add')"
+
+          selected_release="$(jq -c --argjson cutoff "$cutoff" '
+            [
+              .[]
+              | select(.draft == false and .prerelease == false)
+              | select(.published_at != null)
+              | select((.published_at | fromdateiso8601) <= $cutoff)
+              | select(.author.login == "github-actions[bot]")
+            ]
+            | sort_by(.published_at | fromdateiso8601)
+            | last // empty
+          ' <<< "$releases")"
+
+          if [[ -z "$selected_release" ]]; then
+            echo "No GitHub Actions release older than 36 hours was found." >&2
+            exit 1
+          fi
+
+          selected_tag="$(jq -r '.tag_name' <<< "$selected_release")"
+          selected_version="$selected_tag"
+          selected_sha="$(gh api \
+            "repos/$UPSTREAM_REPO/commits/$selected_tag" --jq '.sha')"
+
+          echo "tag=$selected_tag" >> "$GITHUB_OUTPUT"
+          echo "version=$selected_version" >> "$GITHUB_OUTPUT"
+          echo "sha=$selected_sha" >> "$GITHUB_OUTPUT"
+          echo "Selected $selected_tag ($selected_sha)"
+
+      - name: Import snapshot and create commit
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          REPO: ${{ github.repository }}
+          UPSTREAM_REPO: omlahore/RemoveMacAI
+          EXPECTED_REPO_ID: "1394989252"
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$SYNC_TOKEN"
+
+          actions_auth_header="$(printf 'x-access-token:%s' "$ACTIONS_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic $actions_auth_header" \
+            fetch --no-tags origin main
+
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          git switch --detach "$base_sha"
+
+          upstream_dir="$RUNNER_TEMP/remove-mac-ai-upstream"
+          git clone --quiet --depth=1 --single-branch \
+            --branch "$UPSTREAM_TAG" \
+            "https://github.com/$UPSTREAM_REPO.git" \
+            "$upstream_dir"
+
+          actual_upstream_sha="$(git -C "$upstream_dir" rev-parse HEAD)"
+          if [[ "$actual_upstream_sha" != "$UPSTREAM_SHA" ]]; then
+            echo "Upstream tag changed after selection; refusing to sync." >&2
+            exit 1
+          fi
+
+          actual_id="$(gh api "repos/$UPSTREAM_REPO" --jq '.id')"
+          if [[ "$actual_id" != "$EXPECTED_REPO_ID" ]]; then
+            echo "Upstream repository ID mismatch; refusing to sync." >&2
+            exit 1
+          fi
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/workflows/sync-upstream.yml' \
+            --exclude='.github/dependabot.yml' \
+            --exclude='.github/workflows/automerge.yml' \
+            "$upstream_dir/" "$GITHUB_WORKSPACE/"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream snapshot matches main; nothing to sync."
+            exit 0
+          fi
+
+          commit_message="Release $UPSTREAM_VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "$commit_message"
+
+          staging_branch="sync-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup_staging_ref() {
+            gh api --method DELETE \
+              "repos/$REPO/git/refs/heads/$staging_branch" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_staging_ref EXIT
+
+          staging_auth_header="$(printf 'x-access-token:%s' "$SYNC_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic $staging_auth_header" \
+            push origin "HEAD:refs/heads/$staging_branch"
+
+          current_main_sha="$(gh api \
+            "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main_sha" != "$base_sha" ]]; then
+            echo "main moved during sync; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          staging_sha="$(gh api \
+            "repos/$REPO/git/ref/heads/$staging_branch" --jq '.object.sha')"
+          tree_sha="$(gh api \
+            "repos/$REPO/git/commits/$staging_sha" --jq '.tree.sha')"
+
+          commit_payload="$(jq -n \
+            --arg message "$commit_message" \
+            --arg tree "$tree_sha" \
+            --arg parent "$base_sha" \
+            --arg name "github-actions[bot]" \
+            --arg email "41898282+github-actions[bot]@users.noreply.github.com" \
+            '{
+              message: $message,
+              tree: $tree,
+              parents: [$parent],
+              author: {name: $name, email: $email},
+              committer: {name: $name, email: $email}
+            }')"
+
+          final_sha="$(GH_TOKEN="$ACTIONS_TOKEN" gh api \
+            --method POST "repos/$REPO/git/commits" \
+            --input - <<< "$commit_payload" \
+            --jq '.sha')"
+
+          gh api --method PATCH \
+            "repos/$REPO/git/refs/heads/main" \
+            -f "sha=$final_sha" \
+            -F force=false >/dev/null
+
+          cleanup_staging_ref
+          trap - EXIT
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$final_sha" >> "$GITHUB_OUTPUT"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "Updated main with commit $final_sha"
+
+      - name: Dispatch release workflow and wait for success
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MAIN_SHA: ${{ steps.sync.outputs.main_sha }}
+          STARTED_AT: ${{ steps.sync.outputs.started_at }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          gh api --method POST \
+            "repos/$REPO/actions/workflows/release.yml/dispatches" \
+            -f ref=main
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            runs="$(gh api "repos/$REPO/actions/workflows/release.yml/runs" \
+              -F per_page=100)"
+            run_id="$(jq -r --arg started "$STARTED_AT" --arg sha "$MAIN_SHA" '
+              [
+                .workflow_runs[]
+                | select(
+                    .event == "workflow_dispatch"
+                    and .head_sha == $sha
+                    and .created_at >= $started
+                  )
+              ]
+              | sort_by(.created_at)
+              | last
+              | .id // empty
+            ' <<< "$runs")"
+
+            [[ -n "$run_id" ]] && break
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "Could not find the dispatched release workflow run." >&2
+            exit 1
+          fi
+
+          conclusion=""
+          for _ in $(seq 1 120); do
+            run_json="$(gh api "repos/$REPO/actions/runs/$run_id")"
+            status="$(jq -r '.status' <<< "$run_json")"
+
+            if [[ "$status" == "completed" ]]; then
+              conclusion="$(jq -r '.conclusion' <<< "$run_json")"
+              break
+            fi
+
+            sleep 15
+          done
+
+          if [[ "$conclusion" != "success" ]]; then
+            echo "Release workflow failed or timed out: ${conclusion:-timeout}" >&2
+            exit 1
+          fi
+
+          echo "Release workflow completed successfully."
