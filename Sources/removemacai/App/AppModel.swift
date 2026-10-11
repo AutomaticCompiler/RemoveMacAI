@@ -69,11 +69,26 @@ final class AppModel {
   var run: RunState?
   private var cancelWait = false
 
+  var showingWelcome = false
+  var welcomePage = 0
+  static let welcomeSeenKey = "WelcomeSeen"
+
   static weak var shared: AppModel?
 
   init() {
     reload(resetChoices: true)
     AppModel.shared = self
+    if !UserDefaults.standard.bool(forKey: Self.welcomeSeenKey) { showingWelcome = true }
+  }
+
+  func openWelcome() {
+    welcomePage = 0
+    showingWelcome = true
+  }
+
+  func closeWelcome() {
+    showingWelcome = false
+    UserDefaults.standard.set(true, forKey: Self.welcomeSeenKey)
   }
 
   // MARK: reading
@@ -174,6 +189,12 @@ final class AppModel {
   var pendingCount: Int { pendingTweaks.count + (aiPending ? 1 : 0) }
 
   func pending(in group: TweakGroup) -> Int { pendingTweaks.filter { $0.tweak.group == group }.count }
+
+  /// Switches on in a group, out of the ones that can change, for the sidebar.
+  func switchedOn(in group: TweakGroup) -> (on: Int, total: Int) {
+    let tweaks = Tweaks.all.filter { $0.group == group && state($0) != .unsupported && state($0) != .managed }
+    return (tweaks.filter { wanted.contains($0.id) }.count, tweaks.count)
+  }
 
   func discard() { reload(resetChoices: true) }
 
