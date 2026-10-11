@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout main
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -238,7 +238,7 @@ jobs:
 
       - name: Checkout synced source
         if: steps.existing.outputs.exists != 'true'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.sync.outputs.main_sha }}
           persist-credentials: false
@@ -282,7 +282,7 @@ jobs:
 
       - name: Attest build provenance
         if: steps.existing.outputs.exists != 'true'
-        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/removemacai-darwin-arm64.tar.gz
