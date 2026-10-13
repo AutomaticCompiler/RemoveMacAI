@@ -30,6 +30,7 @@ jobs:
       release_tag: ${{ steps.upstream.outputs.tag }}
       release_version: ${{ steps.upstream.outputs.version }}
       main_sha: ${{ steps.sync.outputs.main_sha }}
+      should_sync: ${{ steps.upstream.outputs.should_sync }}
 
     steps:
       - name: Checkout main
@@ -44,6 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_REPO: omlahore/RemoveMacAI
+          REPO: ${{ github.repository }}
           INPUT_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
@@ -56,7 +58,7 @@ jobs:
             echo "Using requested release tag: $selected_tag"
           else
             cutoff="$(date -u -d '36 hours ago' +%s)"
-            releases="$(gh api --paginate --slurp \
+            upstream_releases="$(gh api --paginate --slurp \
               "repos/$UPSTREAM_REPO/releases" | jq 'add')"
 
             selected_release="$(jq -c --argjson cutoff "$cutoff" '
@@ -69,7 +71,7 @@ jobs:
               ]
               | sort_by(.published_at | fromdateiso8601)
               | last // empty
-            ' <<< "$releases")"
+            ' <<< "$upstream_releases")"
 
             if [[ -z "$selected_release" ]]; then
               echo "No GitHub Actions release older than 36 hours was found." >&2
@@ -79,16 +81,153 @@ jobs:
             selected_tag="$(jq -r '.tag_name' <<< "$selected_release")"
           fi
 
-          selected_sha="$(gh api \
-            "repos/$UPSTREAM_REPO/commits/$selected_tag" --jq '.sha')"
+          if ! jq -e '.draft == false' <<< "$selected_release" >/dev/null; then
+            echo "Selected upstream release is a draft; refusing to sync." >&2
+            exit 1
+          fi
 
           echo "tag=$selected_tag" >> "$GITHUB_OUTPUT"
           echo "version=$selected_tag" >> "$GITHUB_OUTPUT"
+
+          releases_file="$RUNNER_TEMP/current-releases.json"
+          gh api --paginate --slurp \
+            "repos/$REPO/releases" | jq 'add' > "$releases_file"
+
+          should_sync="$(python3 - "$selected_tag" "$releases_file" <<'PY'
+          import json
+          import re
+          import sys
+
+          selected_tag, releases_path = sys.argv[1:3]
+
+          pattern = re.compile(
+              r"^v?"
+              r"(0|[1-9][0-9]*)\."
+              r"(0|[1-9][0-9]*)\."
+              r"(0|[1-9][0-9]*)"
+              r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+              r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+          )
+
+          def parse_semver(tag):
+              match = pattern.fullmatch(tag)
+              if not match:
+                  raise ValueError(f"not a valid SemVer tag: {tag!r}")
+
+              major, minor, patch, prerelease, _build = match.groups()
+              prerelease_ids = prerelease.split(".") if prerelease else []
+
+              for identifier in prerelease_ids:
+                  if (
+                      identifier.isdigit()
+                      and len(identifier) > 1
+                      and identifier.startswith("0")
+                  ):
+                      raise ValueError(
+                          f"invalid numeric prerelease identifier in tag {tag!r}"
+                      )
+
+              return (
+                  (int(major), int(minor), int(patch)),
+                  prerelease_ids,
+              )
+
+          def compare(a, b):
+              if a[0] != b[0]:
+                  return (a[0] > b[0]) - (a[0] < b[0])
+
+              a_pre, b_pre = a[1], b[1]
+
+              if not a_pre and b_pre:
+                  return 1
+              if a_pre and not b_pre:
+                  return -1
+              if not a_pre and not b_pre:
+                  return 0
+
+              for a_id, b_id in zip(a_pre, b_pre):
+                  if a_id == b_id:
+                      continue
+
+                  a_numeric = a_id.isdigit()
+                  b_numeric = b_id.isdigit()
+
+                  if a_numeric and b_numeric:
+                      return (int(a_id) > int(b_id)) - (int(a_id) < int(b_id))
+                  if a_numeric != b_numeric:
+                      return -1 if a_numeric else 1
+                  return (a_id > b_id) - (a_id < b_id)
+
+              return (len(a_pre) > len(b_pre)) - (len(a_pre) < len(b_pre))
+
+          try:
+              selected_version = parse_semver(selected_tag)
+
+              with open(releases_path, encoding="utf-8") as f:
+                  releases = json.load(f)
+
+              if any(release.get("tag_name") == selected_tag for release in releases):
+                  print(
+                      f"Release {selected_tag} already exists in the target repository; "
+                      "skipping.",
+                      file=sys.stderr,
+                  )
+                  print("false")
+                  raise SystemExit(0)
+
+              published = [
+                  release for release in releases
+                  if not release.get("draft", False)
+              ]
+
+              current = None
+              for release in published:
+                  tag = release.get("tag_name")
+                  try:
+                      version = parse_semver(tag)
+                  except (TypeError, ValueError) as exc:
+                      raise ValueError(
+                          f"Cannot safely compare against published target release "
+                          f"{tag!r}: {exc}"
+                      ) from exc
+
+                  if current is None or compare(version, current[1]) > 0:
+                      current = (tag, version)
+
+              if current is not None:
+                  current_tag, current_version = current
+                  if compare(selected_version, current_version) <= 0:
+                      print(
+                          f"Selected {selected_tag} is not newer than current "
+                          f"release {current_tag}; skipping.",
+                          file=sys.stderr,
+                      )
+                      print("false")
+                      raise SystemExit(0)
+
+              print("true")
+
+          except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+              print(f"Cannot safely determine whether to sync: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+          )"
+
+          echo "should_sync=$should_sync" >> "$GITHUB_OUTPUT"
+
+          if [[ "$should_sync" != "true" ]]; then
+            exit 0
+          fi
+
+          selected_sha="$(gh api \
+            "repos/$UPSTREAM_REPO/commits/$selected_tag" --jq '.sha')"
+
           echo "sha=$selected_sha" >> "$GITHUB_OUTPUT"
-          echo "Selected $selected_tag ($selected_sha)"
+          echo "Selected $selected_tag ($selected_sha); it is newer than the current release."
 
       - name: Import upstream snapshot and create verified commit
         id: sync
+        if: steps.upstream.outputs.should_sync == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ACTIONS_TOKEN: ${{ github.token }}
@@ -208,7 +347,7 @@ jobs:
 
   build-and-release:
     needs: sync
-    if: needs.sync.result == 'success'
+    if: ${{ needs.sync.result == 'success' && needs.sync.outputs.should_sync == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 90
 
