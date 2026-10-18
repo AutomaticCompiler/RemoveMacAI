@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2
+
+- When macOS is still using a model set, removal waits and tries again twice before giving up. If it still can't, it says so in plain words and tells you to restart and run RemoveMacAI again, instead of printing the raw lock error (#56, #38).
+- Other removal errors show Apple's message instead of the whole error dump.
+
+## 1.1.1
+
+- RemoveMacAI > About RemoveMacAI opens the About window again (#49).
+- `removemacai app` opens the app window when you start it from Terminal, which includes the Homebrew install (#51).
+
 ## 1.1.0
 
 - A welcome guide opens the first time you run the app. It covers what the app changes and what it leaves alone, shows where to approve the profile in System Settings, and starts you from a preset or from nothing. Help > How RemoveMacAI Works opens it again.

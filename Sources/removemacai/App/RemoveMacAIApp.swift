@@ -30,11 +30,23 @@ struct RemoveMacAIApp: App {
   }
 }
 
+// Inside an NSObject subclass `version` resolves to NSObject.version(), not this string.
+private let appVersion = version
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     // A bare binary run from Terminal has no bundle, so it must ask to be a real app.
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+    // Started outside Launch Services (Homebrew, Terminal), SwiftUI never opens the window on its own.
+    DispatchQueue.main.async {
+      guard !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) else { return }
+      let reopen = NSAppleEventDescriptor(
+        eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication),
+        targetDescriptor: NSAppleEventDescriptor(processIdentifier: getpid()),
+        returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+      _ = try? reopen.sendEvent(options: [.noReply], timeout: 1)
+    }
     #if DEBUG
       if let dir = ProcessInfo.processInfo.environment["REMOVEMACAI_SNAPSHOTS"] { Snapshots.run(into: dir) }
     #endif
@@ -48,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
     NSApp.orderFrontStandardAboutPanel(options: [
       .applicationName: "RemoveMacAI",
-      .applicationVersion: version,
+      .applicationVersion: appVersion,
       .version: "",
       .credits: credits,
     ])
