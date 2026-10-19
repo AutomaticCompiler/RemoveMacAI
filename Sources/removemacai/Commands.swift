@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-let version = "1.1.2"
+let version = "1.1.3"
 
 enum Commands {
   /// How to undo, as the person ran us: the one-line installer passes its own
@@ -172,6 +172,7 @@ enum Commands {
     print()
     if removalComplete {
       print(Term.green("Done.") + " " + offSummary)
+      print(Term.dim("I make RemoveMacAI by myself. If it was useful, you can sponsor it: https://github.com/sponsors/omlahore"))
     } else {
       print(Term.yellow("Incomplete.") + " " + offSummary + " The profile remains installed; model removal is incomplete.")
     }
