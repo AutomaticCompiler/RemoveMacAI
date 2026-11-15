@@ -11,7 +11,7 @@
 
 # RemoveMacAI
 
-Debloat macOS. Turn off Apple Intelligence and delete its models, stop the analytics and ads, quiet the pop-ups, switch off other apps' background updaters and get disk space back. You see every change before it happens, and every change can be undone.
+Turn off Apple Intelligence and delete its models. The app starts with just that. If you want to debloat further, it can also stop the analytics and ads, quiet the pop-ups, switch off other apps' background updaters and get disk space back. You see every change before it happens, and every change can be undone.
 
 <p align="center">
   <a href="https://github.com/omlahore/RemoveMacAI/releases/latest/download/RemoveMacAI.zip"><img src="docs/download.svg" alt="Download for Mac" width="236" height="56"></a>
@@ -51,7 +51,7 @@ This runs the command-line version from a temporary folder and installs nothing.
 brew install omlahore/tap/removemacai
 ```
 
-The app and the command line are the same program and share the same undo history.
+The app and the command line are the same program and share the same undo history. If you installed the app from the zip, choose RemoveMacAI > Install Command Line Tool… to get the `removemacai` command too.
 
 ## What it does
 
@@ -61,6 +61,8 @@ The app and the command line are the same program and share the same undo histor
     <img src="docs/screens/privacy-light.webp" alt="Privacy settings in RemoveMacAI" width="840">
   </picture>
 </p>
+
+The app opens on Apple Intelligence alone. **Show More Tools** in the sidebar brings in the rest.
 
 | Section | What you can turn off or change |
 |---|---|
@@ -98,10 +100,13 @@ Two presets get you started. **Recommended** turns Apple Intelligence, analytics
 | `removemacai background` | List other apps' background items; `off` or `on` with their labels |
 | `removemacai clean` | Show the space you can get back; name items to move them to the Trash |
 | `removemacai export <file>` | Write the configuration profile for an MDM |
+| `removemacai export <file> --for iphone\|ipad` | Write an iPhone or iPad profile |
 | `removemacai revert` | Undo everything RemoveMacAI changed |
 | `removemacai app` | Open the app |
 
 `apply`, `undo`, `background` and `clean` show the change first and ask. `--dry-run` shows it and stops, and `--yes` skips the question.
+
+Tab completion for zsh, bash and fish is in [completions](completions). Each script says where it goes.
 
 <p align="center">
   <img src="docs/terminal.gif" alt="RemoveMacAI turning off Apple Intelligence in Terminal" width="840">
@@ -121,6 +126,17 @@ removemacai export Privacy.mobileconfig --no-ai analytics personalized-ads spotl
 
 It holds the Apple Intelligence restrictions, the download block for removed models and the locked tweaks. Per-user tweaks such as Finder and Dock settings aren't in the profile; `removemacai apply` sets those on each Mac. `removemacai tweaks --json` reports the state of every tweak for compliance scripts.
 
+## iPhone and iPad
+
+`export --for iphone` or `export --for ipad` writes a profile for that device:
+
+```sh
+removemacai export Phone.mobileconfig --for iphone
+removemacai export Pad.mobileconfig --for ipad
+```
+
+An unsupervised phone only honors the Siri and ChatGPT switches.
+
 ## How it works
 
 - **Locked settings** (Apple Intelligence and the tweaks marked with a lock) go in one configuration profile that you approve in System Settings, because macOS requires that. Removing the profile undoes all of them.
@@ -128,7 +144,7 @@ It holds the Apple Intelligence restrictions, the download block for removed mod
 - **Models** are removed through Apple's asset service, and the profile points their downloads at a closed local port so macOS doesn't fetch them again.
 - **Storage** cleanup moves files to the Trash, so they aren't gone until you empty it. Unavailable simulators and Time Machine local snapshots are deleted right away by `simctl` and `tmutil`.
 
-System Integrity Protection stays on, nothing under `/System` is modified, and RemoveMacAI makes no network requests and collects no data.
+System Integrity Protection stays on, nothing under `/System` is modified, and RemoveMacAI collects no data. It makes no network requests, except to GitHub when you choose Check for Updates… in the app.
 
 ## What it doesn't do
 
@@ -146,8 +162,14 @@ Open a photo in Photos, choose **Edit**, then **Tools > Clean Up**. Photos Clean
 **Do macOS updates undo the changes?**
 The profile persists across updates. If an update resets one of the other settings, RemoveMacAI shows it as not applied and you can apply it again.
 
+**A macOS update stops partway through its download.**
+Software Update finishes the update itself, then tries to fetch the Apple Intelligence models the profile blocks and keeps retrying them ([#109](https://github.com/omlahore/RemoveMacAI/issues/109)). After about 2 hours with the Mac awake it gives up on them and installs the update, with the profile still on. Sleep pauses that timer. To skip the wait, run `removemacai on`, restart, update, then run `removemacai off`. The restart matters, because the stuck download keeps retrying the old address until then. macOS can start fetching the models again while the profile is off, and `removemacai off` deletes whatever it got.
+
 **Storage settings still lists Apple Intelligence after the models were deleted.**
 Apple's asset service releases the models right away, but macOS deletes the files on its own schedule. Until then, System Settings > General > Storage keeps counting them under Apple Intelligence.
+
+**Spotlight lost its new look, clipboard history or conversions.**
+Reports so far point at two settings. In macOS 27 the Spotlight window runs as a process named Siri, so turning Siri off can change it: run `removemacai off --keep siri` and restart to check. Keeping Siri also keeps the foundation models, about 13 GB. If only web results and conversions are missing, try `removemacai undo spotlight-web`, which Recommended includes.
 
 **Why is a process named Siri still running?**
 In macOS 27 the Spotlight window runs as a process named Siri. Some system services also stay loaded; they are protected by System Integrity Protection.
@@ -162,7 +184,9 @@ Apple silicon.
 | macOS | Status |
 |---|---|
 | 27 | Supported, tested on 27.0. On 27.0.1, use 0.2.3 or later. |
-| 26 and earlier | Not supported |
+| 26 | Runs since 1.1.0. Most of the testing has been on 27. |
+| 15.1 and later (Sequoia) | In testing, use [1.2.0-beta.1](https://github.com/omlahore/RemoveMacAI/releases/tag/v1.2.0-beta.1). Spatial Photos isn't on 15, so it's left out there. |
+| 15.0 and earlier | Not supported, Apple Intelligence starts in 15.1 |
 
 ## Uninstall
 

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-let version = "1.1.4"
+let version = "1.2.0"
 
 enum Commands {
   /// How to undo, as the person ran us: the one-line installer passes its own
@@ -21,7 +21,7 @@ enum Commands {
   static func status() {
     header()
     print(Term.bold("Features"))
-    for feature in Catalog.features {
+    for feature in Catalog.availableFeatures {
       let label: String
       switch Settings.state(feature) {
       case .lockedOff: label = Term.green("off") + Term.dim(" (locked)")
@@ -36,6 +36,7 @@ enum Commands {
       print(Term.dim("  macOS removes deleted model files itself, so System Settings can count them for a while."))
     }
     print()
+    warnPendingUpdate()
     if isOff() {
       print(Term.green("Apple Intelligence is off.") + Term.dim(" Undo with: \(undo)"))
     } else {
@@ -51,12 +52,13 @@ enum Commands {
       return nil
     }
     var readings: [String: Int64] = [:]
-    for set in Catalog.modelSets {
+    for set in Catalog.availableModelSets {
       let bytes = Models.bytes(set.name)
       readings[set.name] = bytes
-      print("  " + Term.pad(set.title, 40) + modelSize(bytes))
+      let leftover = bytes == 0 && Models.present(set.name)
+      print("  " + Term.pad(set.title, 40) + (leftover ? Term.yellow("files left in its folder") : modelSize(bytes)))
     }
-    let total = Models.total(Catalog.modelSets.map(\.name), read: { readings[$0] })
+    let total = Models.total(Catalog.availableModelSets.map(\.name), read: { readings[$0] })
     print("  " + Term.pad("Total", 40) + (total.map { Term.bold(Term.size($0)) } ?? Term.yellow("unknown")))
     return total
   }
@@ -66,19 +68,19 @@ enum Commands {
     return bytes > 0 ? Term.yellow(Term.size(bytes)) : Term.dim("none")
   }
 
-  static func featuresOn() -> Int { Catalog.features.filter { Settings.state($0) == .on }.count }
+  static func featuresOn() -> Int { Catalog.availableFeatures.filter { Settings.state($0) == .on }.count }
 
   static func isOff() -> Bool {
     let profile = Profile.installed()
-    return profile.on && profile.ai && Catalog.features.allSatisfy { Settings.state($0).isOff }
+    return profile.on && profile.ai && Catalog.availableFeatures.allSatisfy { Settings.state($0).isOff }
   }
 
   // MARK: off
 
   static func off(keep: Set<String>, dryRun: Bool, yes: Bool) -> Bool {
     header()
-    for id in keep where Catalog.feature(id) == nil {
-      Term.fail("there is no feature called \"\(id)\". The names are listed by: removemacai features")
+    for id in keep where !Catalog.availableFeatures.contains(where: { $0.id == id }) {
+      Term.fail("there is no feature called \"\(id)\" on this version of macOS. The names are listed by: removemacai features")
     }
     let sets = Catalog.setsToRemove(keeping: keep)
     let modelsAvailable = sets.isEmpty || Models.available()
@@ -94,13 +96,14 @@ enum Commands {
         print(Term.dim("macOS removes deleted model files itself, so System Settings can count them for a while."))
       }
       warnKeptButOff(keep)
+      warnPendingUpdate()
       print(Term.dim("Check it with: removemacai status    Undo with: \(undo)"))
       return true
     }
 
     let on = featuresOn()
     print(profileReady ? "The profile is installed. Checking the selected models." : "Checking Apple Intelligence and its models.")
-    print("  " + Term.pad("Features on", 20) + "\(on) of \(Catalog.features.count)")
+    print("  " + Term.pad("Features on", 20) + "\(on) of \(Catalog.availableFeatures.count)")
     print("  " + Term.pad("Models on disk", 20) + (modelsBefore.map(Term.size) ?? "unknown"))
     print()
     print("Turning it off will:")
@@ -177,6 +180,7 @@ enum Commands {
       print(Term.yellow("Incomplete.") + " " + offSummary + " The profile remains installed; model removal is incomplete.")
     }
     warnKeptButOff(keep)
+    warnPendingUpdate()
     print(Term.dim("Check it with: removemacai status    Undo with: \(undo)"))
     return removalComplete
   }
@@ -229,9 +233,16 @@ enum Commands {
   }
 
   static func warnKeptButOff(_ keep: Set<String>) {
-    for feature in Catalog.features where keep.contains(feature.id) && Settings.state(feature) == .off {
+    for feature in Catalog.availableFeatures where keep.contains(feature.id) && Settings.state(feature) == .off {
       print(Term.yellow("!") + " \(feature.title) is kept, but it is switched off. Turn it on in System Settings.")
     }
+  }
+
+  static func warnPendingUpdate() {
+    guard let update = PendingUpdate.slowedBy(Profile.installed()) else { return }
+    print(Term.yellow("!") + " \(update) is ready to install. Its download can stop for about 2 hours of awake time while macOS retries the blocked models, then it carries on by itself.")
+    print(Term.dim("  To skip the wait: removemacai on, restart, update, then removemacai off."))
+    print()
   }
 
   /// Injectable operations let self-tests verify failures without contacting the asset service.
@@ -324,8 +335,14 @@ enum Commands {
 
   // MARK: features
 
-  static func features() {
-    for f in Catalog.features { print(Term.pad(f.id, 26) + f.title) }
+  static func features(json: Bool) {
+    if json {
+      let rows = Catalog.availableFeatures.map { ["id": $0.id, "title": $0.title] }
+      let data = try! JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+      print(String(decoding: data, as: UTF8.self))
+      return
+    }
+    for f in Catalog.availableFeatures { print(Term.pad(f.id, 26) + f.title) }
   }
 
   // MARK: helpers
@@ -336,6 +353,12 @@ enum Commands {
       "x-apple.systempreferences:com.apple.preferences.configurationprofiles",
     ] {
       if let u = URL(string: url), NSWorkspace.shared.open(u) { return }
+    }
+  }
+
+  static func openFullDiskAccessSettings() {
+    if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+      NSWorkspace.shared.open(u)
     }
   }
 

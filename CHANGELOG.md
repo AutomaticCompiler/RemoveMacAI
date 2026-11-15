@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.0
+
+This release includes everything from 1.2.0-beta.1, so RemoveMacAI now runs on macOS 15.1 (Sequoia) and later, not just 26 and 27 (#45).
+
+- The app is translated into Simplified Chinese (#54). Contributed by tc54188 in #92. The strings Hindi, Italian, Japanese and Urdu were missing are filled in too.
+- The app starts on Apple Intelligence alone. The Overview and the sidebar show just that until you choose Show More Tools, and the first-run guide offers Just Apple Intelligence first. Anyone who already changed other settings still sees everything. The command line doesn't change.
+- When macOS keeps files out of reach during a Storage clean-up, the app offers to open the Full Disk Access settings (#66).
+- Background items are scanned off the main thread, so a slow scan can't hold up the window (#70).
+- Removal no longer reports an error from Apple's asset service when the models it was deleting are gone anyway (#104).
+- When a macOS update is waiting and the profile blocks model downloads, `removemacai status`, `off` and the Overview say that its download can stop for about 2 hours of awake time, and how to skip the wait (#109). The README's FAQ covers it too. It reads what Software Update already found, so it makes no network request.
+- The app is translated into Turkish. Contributed by yigitbuyukeren in #113.
+- `removemacai status` says when a model set's folder still holds files, instead of showing none because Apple's asset service reports the set as gone (#45).
+- Background Items marks items left over from a deleted app, whose program is no longer on the Mac, and has a minus button to stop one and move it to the Trash, from where it can be dragged back. `removemacai background` marks them as left over too (#66).
+- The app has a Check for Updates… item in the RemoveMacAI menu. It asks GitHub for the latest release and offers to open its download page. It only checks when you choose it, so RemoveMacAI still makes no network requests on its own (#44).
+- The app has an Install Command Line Tool… item in the RemoveMacAI menu. It asks first, then links `/usr/local/bin/removemacai` to the app, so the app from the zip gets the `removemacai` command too. It never replaces a file there that isn't a link (#60).
+- `removemacai background` with an action other than `off` or `on`, such as the typo `of`, now fails and says which actions it takes, instead of listing the items and exiting 0 (#82).
+- The app is translated into Hindi and Urdu (#101). Urdu keeps the names of macOS screens and buttons in English, since macOS has no Urdu interface.
+- Block Music launches is now called Stop Music from opening, even by hand, and its warning says Music won't open at all until you undo it. The old name read as if only AirPods were blocked (#67).
+
+## 1.2.0-beta.1
+
+A beta for macOS 15 (Sequoia). The one-line installer and Homebrew stay on 1.1.4 until it's out of beta.
+
+- RemoveMacAI runs on macOS 15.1 and later, not just 26 and 27 (#45). Apple Intelligence features that a macOS version doesn't have are left out, so Sequoia doesn't list Spatial Photos. Contributed by mojila in #47.
+- After a macOS upgrade that adds Apple Intelligence features the profile doesn't cover yet, RemoveMacAI asks you to approve the profile again the next time you run it, instead of saying everything is already off.
+- If something goes wrong on Sequoia, open an issue with the output of `removemacai status` and `sw_vers`.
+
 ## 1.1.4
 
 - `removemacai undo` with no tweak names now asks you to name them, the way `apply` does, instead of saying nothing needs changing (#57). Contributed by cosmicsid004 in #64.
